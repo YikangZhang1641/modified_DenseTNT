@@ -1,0 +1,14 @@
+models*
+output*
+pred_*
+.idea
+eval.args
+src/__pycache__/
+src/build/
+src/modeling/__pycache__/
+train/
+val/
+*.so
+*.c
+*.html
+runs

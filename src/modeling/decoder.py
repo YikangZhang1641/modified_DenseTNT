@@ -362,7 +362,7 @@ class Decoder(nn.Module):
                 goals_2D = mapping[i]['goals_2D']
 
                 self.goals_2D_per_example(i, goals_2D, mapping, lane_states_batch, inputs, inputs_lengths,
-                                          hidden_states, labels, labels_is_valid, device, loss, DE)
+                                          hidden_states, labels, labels_is_valid, device, loss, DE) # densify: 892 -> 1569
 
             if 'set_predict' in args.other_params:
                 pass

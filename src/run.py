@@ -14,7 +14,11 @@ from torch.utils.data import RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm as tqdm_
 
+from tensorboardX import SummaryWriter
+writer = SummaryWriter('runs/')
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
 
 def compile_pyx_files():
@@ -145,6 +149,7 @@ def pair2joint(pred_trajectory, pred_score, args):
 def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoch, queue=None, optimizer_2=None):
     li_ADE = []
     li_FDE = []
+    li_LOSS = []
     utils.other_errors_dict.clear()
     start_time = time.time()
     if 'data_ratio_per_epoch' in args.other_params:
@@ -160,6 +165,7 @@ def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoc
             max_iter_num -= 1
             if max_iter_num == 0:
                 break
+        # print("aaa", step, batch)
         loss, DE, _ = model(batch, device)
         loss.backward()
 
@@ -168,6 +174,7 @@ def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoc
 
         final_idx = batch[0].get('final_idx', -1)
         li_FDE.extend([each for each in DE[:, final_idx]])
+        li_LOSS.append(loss.item())
 
         if optimizer_2 is not None:
             optimizer_2.step()
@@ -197,8 +204,10 @@ def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoc
         miss_rates = (utils.get_miss_rate(li_FDE, dis=2.0), utils.get_miss_rate(li_FDE, dis=4.0),
                       utils.get_miss_rate(li_FDE, dis=6.0))
 
+        writer.add_scalar('LOSS', np.mean(li_LOSS), i_epoch)
         utils.logging(f'FDE: {np.mean(li_FDE) if len(li_FDE) > 0 else None}',
                       f'MR(2m,4m,6m): {miss_rates}',
+                      f'loss: {np.mean(li_LOSS)}',
                       type='train_loss', to_screen=True)
 
 
@@ -302,8 +311,11 @@ def run(args):
         while not spawn_context.join():
             pass
     else:
-        assert False, 'Please set "--distributed_training 1" to use single gpu'
-
+        # assert False, 'Please set "--distributed_training 1" to use single gpu'
+        queue = mp.Manager().Queue()
+        kwargs = {'args': args}
+        demo_basic(0, args.distributed_training, kwargs, queue)
+        train_dataset = Dataset(args, args.train_batch_size)
 
 def main():
     parser = argparse.ArgumentParser()

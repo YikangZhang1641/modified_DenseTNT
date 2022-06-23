@@ -12,6 +12,8 @@ import structs
 import utils
 from modeling.vectornet import VectorNet
 
+import pickle
+
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -23,7 +25,7 @@ def eval_instance_argoverse(batch_size, args, pred, mapping, file2pred, file2lab
     for i in range(batch_size):
         a_pred = pred[i]
         assert a_pred.shape == (6, args.future_frame_num, 2)
-        file_name_int = int(os.path.split(mapping[i]['file_name'])[1][:-4])
+        file_name_int = os.path.split(mapping[i]['file_name'])[1][:-4]
         file2pred[file_name_int] = a_pred
         if not args.do_test:
             file2labels[file_name_int] = mapping[i]['origin_labels']
@@ -81,6 +83,7 @@ def do_eval(args):
     length = len(iter_bar)
 
     argo_pred = structs.ArgoPred()
+    save_result = {}
 
     for step, batch in enumerate(iter_bar):
         pred_trajectory, pred_score, _ = model(batch, device)
@@ -91,6 +94,13 @@ def do_eval(args):
             assert pred_trajectory[i].shape == (6, args.future_frame_num, 2)
             assert pred_score[i].shape == (6,)
             argo_pred[mapping[i]['file_name']] = structs.MultiScoredTrajectory(pred_score[i].copy(), pred_trajectory[i].copy())
+            pk_name = mapping[i]['file_name'].split('/')[-1][:-6]
+            track_id, start_time, end_time, ego_id = pk_name.split('_')
+            if track_id not in save_result:
+                save_result[track_id] = {}
+            if start_time not in save_result[track_id]:
+                save_result[track_id][start_time] = {}
+            save_result[track_id][start_time][ego_id] = pred_trajectory[i]
 
         if args.argoverse:
             eval_instance_argoverse(batch_size, args, pred_trajectory, mapping, file2pred, file2labels, DEs, iter_bar)
@@ -100,6 +110,10 @@ def do_eval(args):
     if args.argoverse:
         from dataset_argoverse import post_eval
         post_eval(args, file2pred, file2labels, DEs)
+        save_result["file2pred"] = file2pred
+        save_result["file2labels"] = file2labels
+        with open("pred_trajs_for_()", 'wb') as f:
+            pickle.dump(save_result, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def main():

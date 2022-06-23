@@ -170,7 +170,7 @@ def add_argument(parser):
                         default=None,
                         type=float)
     parser.add_argument("--stage_one_K", type=int)
-    parser.add_argument("--master_port", default='12355')
+    parser.add_argument("--master_port", default='12356')
     parser.add_argument("--gpu_split",
                         nargs='?',
                         default=0,

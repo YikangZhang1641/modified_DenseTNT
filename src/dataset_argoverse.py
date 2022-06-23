@@ -20,6 +20,7 @@ from utils import get_name, get_file_name_int, get_angle, logging, rotate, round
 from utils import get_points_remove_repeated, get_one_subdivide_polygon, get_dis_point_2_polygons, larger, equal, assert_
 from utils import get_neighbour_points, get_subdivide_points, get_unit_vector, get_dis_point_2_points
 
+
 TIMESTAMP = 0
 TRACK_ID = 1
 OBJECT_TYPE = 2
@@ -38,6 +39,136 @@ VECTOR_PRE_X = 0
 VECTOR_PRE_Y = 1
 VECTOR_X = 2
 VECTOR_Y = 3
+
+
+def get_sub_map_interaction(lane_densetnt, args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[], mapping=None):
+    """
+    Calculate lanes which are close to (x, y) on map.
+
+    Only take lanes which are no more than args.max_distance away from (x, y).
+
+    """
+
+    if args.not_use_api:
+        pass
+    else:
+        # assert isinstance(am, ArgoverseMap)
+        if 'semantic_lane' in args.other_params:
+            # lane_ids = am.get_lane_ids_in_xy_bbox(x, y, city_name, query_search_range_manhattan=args.max_distance)
+            lane_ids = list(lane_densetnt.keys())
+            # local_lane_centerlines = [am.get_lane_segment_centerline(lane_id, city_name) for lane_id in lane_ids]
+            local_lane_centerlines = [lane_densetnt[lane_id]['polygon'] for lane_id in lane_ids]
+            polygons = local_lane_centerlines
+
+        # polygons = [polygon[:, :2].copy() for polygon in polygons]
+        angle = mapping['angle']
+        # for index_polygon, polygon in enumerate(polygons):
+        #     for i, point in enumerate(polygon):
+        #         point[0], point[1] = rotate(point[0] - x, point[1] - y, angle)
+        # # local centerline points
+
+
+        def dis_2(point):
+            return point[0] * point[0] + point[1] * point[1]
+
+        def get_dis(point_a, point_b):
+            return np.sqrt((point_a[0] - point_b[0]) ** 2 + (point_a[1] - point_b[1]) ** 2)
+
+        def get_dis_for_points(point, polygon):
+            dis = np.min(np.square(polygon[:, 0] - point[0]) + np.square(polygon[:, 1] - point[1]))
+            return np.sqrt(dis)
+
+        def ok_dis_between_points(points, points_, limit):
+            dis = np.inf
+            for point in points:
+                dis = np.fmin(dis, get_dis_for_points(point, points_))
+                if dis < limit:
+                    return True
+            return False
+
+        def get_hash(point):
+            return round((point[0] + 500) * 100) * 1000000 + round((point[1] + 500) * 100)
+
+        lane_idx_2_polygon_idx = {}
+        for polygon_idx, lane_idx in enumerate(lane_ids):
+            lane_idx_2_polygon_idx[lane_idx] = polygon_idx
+        ###### not used
+
+        if 'goals_2D' in args.other_params:
+            points = []
+            visit = {}
+            point_idx_2_unit_vector = []
+
+            mapping['polygons'] = polygons # local centerline
+
+            for index_polygon, polygon in enumerate(polygons):
+                for i, point in enumerate(polygon):
+                    hash = get_hash(point)
+                    if hash not in visit:
+                        visit[hash] = True
+                        points.append(point)
+
+                if 'subdivide' in args.other_params:
+                    subdivide_points = get_subdivide_points(polygon)
+                    points.extend(subdivide_points)
+                    subdivide_points = get_subdivide_points(polygon, include_self=True)
+
+            mapping['goals_2D'] = np.array(points) # all points in polygon
+
+        for index_polygon, polygon in enumerate(polygons):
+            # print(len(polygon))
+            # assert_(2 <= len(polygon) <= 10, info=len(polygon))
+            # assert len(polygon) % 2 == 1
+
+            # if args.visualize:
+            #     traj = np.zeros((len(polygon), 2))
+            #     for i, point in enumerate(polygon):
+            #         traj[i, 0], traj[i, 1] = point[0], point[1]
+            #     mapping['trajs'].append(traj)
+
+            start = len(vectors)
+            if 'semantic_lane' in args.other_params:
+                assert len(lane_ids) == len(polygons)
+                lane_id = lane_ids[index_polygon]
+                # lane_segment = am.city_lane_centerlines_dict[city_name][lane_id]
+                lane_segment = lane_densetnt[lane_id]
+            assert_(len(polygon) >= 2) # lane points size should be larger than 1
+            for i, point in enumerate(polygon):
+                if i > 0:
+                    vector = [0] * args.hidden_size
+                    vector[-1 - VECTOR_PRE_X], vector[-1 - VECTOR_PRE_Y] = point_pre[0], point_pre[1]
+                    vector[-1 - VECTOR_X], vector[-1 - VECTOR_Y] = point[0], point[1]
+                    vector[-5] = 1
+                    vector[-6] = i
+
+                    vector[-7] = len(polyline_spans)
+
+                    if 'semantic_lane' in args.other_params:
+                        # vector[-8] = 1 if lane_segment.has_traffic_control else -1
+                        vector[-8] = 1 if lane_segment['trafficLights'] > 0 else -1
+
+                        # vector[-9] = 1 if lane_segment.turn_direction == 'RIGHT' else \
+                        #     -1 if lane_segment.turn_direction == 'LEFT' else 0
+                        vector[-9] = 1 if lane_segment['rights'] > 0 else \
+                            -1 if lane_segment['lefts'] > 0 else 0
+
+                        # vector[-10] = 1 if lane_segment.is_intersection else -1
+                        vector[-10] = 1 if lane_segment['allWayStop'] > 0 else -1
+
+                    point_pre_pre = (2 * point_pre[0] - point[0], 2 * point_pre[1] - point[1])
+                    if i >= 2:
+                        point_pre_pre = polygon[i - 2]
+                    vector[-17] = point_pre_pre[0]
+                    vector[-18] = point_pre_pre[1]
+
+                    vectors.append(vector)
+                point_pre = point
+
+            end = len(vectors)
+            if start < end:
+                polyline_spans.append([start, end])
+
+    return (vectors, polyline_spans)
 
 
 def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[], mapping=None):
@@ -85,6 +216,7 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
                     scale = mapping['scale']
                     point[0] *= scale
                     point[1] *= scale
+        # local centerline points
 
         if args.use_centerline:
             if 'semantic_lane' in args.other_params:
@@ -114,13 +246,14 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
         lane_idx_2_polygon_idx = {}
         for polygon_idx, lane_idx in enumerate(lane_ids):
             lane_idx_2_polygon_idx[lane_idx] = polygon_idx
+        ###### not used
 
         if 'goals_2D' in args.other_params:
             points = []
             visit = {}
             point_idx_2_unit_vector = []
 
-            mapping['polygons'] = polygons
+            mapping['polygons'] = polygons # local centerline
 
             for index_polygon, polygon in enumerate(polygons):
                 for i, point in enumerate(polygon):
@@ -134,7 +267,7 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
                     points.extend(subdivide_points)
                     subdivide_points = get_subdivide_points(polygon, include_self=True)
 
-            mapping['goals_2D'] = np.array(points)
+            mapping['goals_2D'] = np.array(points) # all points in polygon
 
         for index_polygon, polygon in enumerate(polygons):
             assert_(2 <= len(polygon) <= 10, info=len(polygon))
@@ -151,7 +284,7 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
                 assert len(lane_ids) == len(polygons)
                 lane_id = lane_ids[index_polygon]
                 lane_segment = am.city_lane_centerlines_dict[city_name][lane_id]
-            assert_(len(polygon) >= 2)
+            assert_(len(polygon) >= 2) # lane points size should be larger than 1
             for i, point in enumerate(polygon):
                 if i > 0:
                     vector = [0] * args.hidden_size
@@ -216,7 +349,7 @@ def preprocess_map(map_dict):
         map_dict[city_name]['polylines_dict'] = polylines_dict
 
 
-def preprocess(args, id2info, mapping):
+def preprocess(args, id2info, mapping, lane_densetnt=None):
     """
     This function calculates matrix based on information from get_instance.
     """
@@ -265,8 +398,8 @@ def preprocess(args, id2info, mapping):
             if i > 0:
                 # print(x-line_pre[X], y-line_pre[Y])
                 vector = [line_pre[X], line_pre[Y], x, y, line[TIMESTAMP], line[OBJECT_TYPE] == 'AV',
-                          line[OBJECT_TYPE] == 'AGENT', line[OBJECT_TYPE] == 'OTHERS', len(polyline_spans), i]
-                vectors.append(get_pad_vector(vector))
+                          line[OBJECT_TYPE] == 'AGENT', line[OBJECT_TYPE] == 'OTHERS', len(polyline_spans), i] #vector format
+                vectors.append(get_pad_vector(vector)) # extend 0 behind
             line_pre = line
 
         end = len(vectors)
@@ -284,9 +417,12 @@ def preprocess(args, id2info, mapping):
     t = len(vectors)
     mapping['map_start_polyline_idx'] = len(polyline_spans)
     if args.use_map:
-        vectors, polyline_spans = get_sub_map(args, mapping['cent_x'], mapping['cent_y'], mapping['city_name'],
-                                              vectors=vectors,
-                                              polyline_spans=polyline_spans, mapping=mapping)
+        # vectors, polyline_spans = get_sub_map(args, mapping['cent_x'], mapping['cent_y'], mapping['city_name'],
+        #                                       vectors=vectors,
+        #                                       polyline_spans=polyline_spans, mapping=mapping) #339
+        vectors, polyline_spans = get_sub_map_interaction(lane_densetnt, args, mapping['cent_x'], mapping['cent_y'], mapping['city_name'],
+                                          vectors=vectors,
+                                          polyline_spans=polyline_spans, mapping=mapping)  # 339
 
     # logging('len(vectors)', t, len(vectors), prob=0.01)
 
@@ -300,14 +436,14 @@ def preprocess(args, id2info, mapping):
     #         matrix[i][j].fill_(each)
 
     labels = []
-    info = id2info['AGENT']
-    info = info[mapping['agent_pred_index']:]
+    info = id2info['AGENT'] # 50 steps
+    info = info[mapping['agent_pred_index']:] # last 80 steps to predict
     if not args.do_test:
         if 'set_predict' in args.other_params:
             pass
         else:
-            assert len(info) == 30
-    for line in info:
+            assert len(info) == 80
+    for line in info:   # x y for the 80 steps
         labels.append(line[X])
         labels.append(line[Y])
 
@@ -317,7 +453,7 @@ def preprocess(args, id2info, mapping):
 
     if 'goals_2D' in args.other_params:
         point_label = np.array(labels[-2:])
-        mapping['goals_2D_labels'] = np.argmin(get_dis(mapping['goals_2D'], point_label))
+        mapping['goals_2D_labels'] = np.argmin(get_dis(mapping['goals_2D'], point_label)) # final point
 
         if 'stage_one' in args.other_params:
             stage_one_label = 0
@@ -333,13 +469,41 @@ def preprocess(args, id2info, mapping):
 
     mapping.update(dict(
         matrix=matrix,
-        labels=np.array(labels).reshape([30, 2]),
+        labels=np.array(labels).reshape([80, 2]),
         polyline_spans=[slice(each[0], each[1]) for each in polyline_spans],
         labels_is_valid=np.ones(args.future_frame_num, dtype=np.int64),
-        eval_time=30,
+        eval_time=80,
     ))
 
     return mapping
+
+
+def interaction_get_instance(densetnt, file_name, args):
+    """
+    Extract polylines from one example file content.
+    """
+
+    global max_vector_num
+    id2info = densetnt['id2info']
+    vector_num = sum([len(id2info[key]) for key in id2info.keys()])
+    if max_vector_num < vector_num:
+        max_vector_num = vector_num
+
+    lane_densetnt = densetnt['lane_densetnt']
+
+    mapping = densetnt['mapping']
+    mapping['file_name'] = file_name
+
+    if args.do_eval:
+        origin_labels = np.zeros([80, 2])
+        for i, line in enumerate(id2info['AGENT'][20:]):
+            origin_labels[i][0], origin_labels[i][1] = rotate(line[X], line[Y], -mapping['angle'])
+            origin_labels[i][0] += mapping['cent_x']
+            origin_labels[i][1] += mapping['cent_y']
+
+        mapping['origin_labels'] = origin_labels
+
+    return preprocess(args, id2info, mapping, lane_densetnt)
 
 
 def argoverse_get_instance(lines, file_name, args):
@@ -374,7 +538,7 @@ def argoverse_get_instance(lines, file_name, args):
         else:
             id2info[line[TRACK_ID]] = [line]
 
-        if line[OBJECT_TYPE] == 'AGENT' and len(id2info['AGENT']) == 20:
+        if line[OBJECT_TYPE] == 'AGENT' and len(id2info['AGENT']) == 20: #eady have 20 timesteps
             assert 'AV' in id2info
             assert 'cent_x' not in mapping
             agent_lines = id2info['AGENT']
@@ -406,7 +570,7 @@ def argoverse_get_instance(lines, file_name, args):
         return None
 
     if args.do_eval:
-        origin_labels = np.zeros([30, 2])
+        origin_labels = np.zeros([80, 2])
         for i, line in enumerate(id2info['AGENT'][20:]):
             origin_labels[i][0], origin_labels[i][1] = line[X], line[Y]
         mapping['origin_labels'] = origin_labels
@@ -439,17 +603,20 @@ class Dataset(torch.utils.data.Dataset):
             pickle_file = open(os.path.join(args.temp_file_dir, get_name('ex_list')), 'rb')
             self.ex_list = pickle.load(pickle_file)
             # self.ex_list = self.ex_list[len(self.ex_list) // 2:]
+            # print("rrrrrreuse temp file")
             pickle_file.close()
         else:
-            global am
-            am = ArgoverseMap()
+            # global am
+            # am = ArgoverseMap("/home/user/Backup/DRL服务器备份/Projects/argoverse-api/map_files")
             if args.core_num >= 1:
                 # TODO
                 files = []
                 for each_dir in data_dir:
                     root, dirs, cur_files = os.walk(each_dir).__next__()
+                    # files.extend([os.path.join(each_dir, file) for file in cur_files if
+                    #               file.endswith("csv") and not file.startswith('.')])
                     files.extend([os.path.join(each_dir, file) for file in cur_files if
-                                  file.endswith("csv") and not file.startswith('.')])
+                              file.endswith("pkl") and not file.startswith('.')])
                 print(files[:5], files[-5:])
 
                 pbar = tqdm(total=len(files))
@@ -464,10 +631,17 @@ class Dataset(torch.utils.data.Dataset):
                         file = queue.get()
                         if file is None:
                             break
-                        if file.endswith("csv"):
-                            with open(file, "r", encoding='utf-8') as fin:
-                                lines = fin.readlines()[1:]
-                            instance = argoverse_get_instance(lines, file, args)
+                        # if file.endswith("csv"):
+                            # with open(file, "r", encoding='utf-8') as fin:
+                            #     lines = fin.readlines()[1:]
+                            # instance = argoverse_get_instance(lines, file, args)
+
+                        if file.endswith("pkl"):
+                            with open(file, 'rb') as f:
+                                data_densetnt = pickle.load(f, encoding="latin1")
+                            print("data_densetnt load")
+                            instance = interaction_get_instance(data_densetnt, file, args)
+
                             if instance is not None:
                                 data_compress = zlib.compress(pickle.dumps(instance))
                                 res.append(data_compress)
@@ -558,7 +732,7 @@ def post_eval(args, file2pred, file2labels, DEs):
             type=score_file, to_screen=True, append_time=True)
     utils.logging('other_errors {}'.format(utils.other_errors_to_string()),
                   type=score_file, to_screen=True, append_time=True)
-    metric_results = eval_forecasting.get_displacement_errors_and_miss_rate(file2pred, file2labels, 6, 30, 2.0)
+    metric_results = eval_forecasting.get_displacement_errors_and_miss_rate(file2pred, file2labels, 6, 80, 2.0)
     utils.logging(metric_results, type=score_file, to_screen=True, append_time=True)
     DE = np.concatenate(DEs, axis=0)
     length = DE.shape[1]
